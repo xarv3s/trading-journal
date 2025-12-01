@@ -1,0 +1,8 @@
+streamlit
+pandas
+sqlalchemy
+kiteconnect
+plotly
+supabase
+python-dotenv
+psycopg2-binary
