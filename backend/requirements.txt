@@ -8,6 +8,3 @@ python-dotenv
 pydantic
 pydantic-settings
 requests
-selenium
-webdriver-manager
-pyotp
