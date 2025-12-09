@@ -24,6 +24,7 @@ class OpenTrade(Base):
     is_mtf = Column(Integer, default=0)
     is_basket = Column(Integer, default=0)
     stop_loss = Column(Float, nullable=True)
+    realized_pnl = Column(Float, default=0.0)
     
     constituents = relationship("TradeConstituent", back_populates="basket_trade", foreign_keys="TradeConstituent.open_trade_id")
 
@@ -50,6 +51,8 @@ class ClosedTrade(Base):
     screenshot_path = Column(String, nullable=True)
     is_mtf = Column(Integer, default=0)
     is_basket = Column(Integer, default=0)
+    basket_id = Column(Integer, nullable=True) # Link to parent basket (OpenTrade ID)
+    open_trade_id = Column(Integer, nullable=True) # Link to original trade cycle (OpenTrade ID):
 
 class TradeConstituent(Base):
     __tablename__ = "trade_constituents"
@@ -82,7 +85,10 @@ class DailyEquity(Base):
     __tablename__ = "daily_equity"
     
     date = Column(Date, primary_key=True)
-    account_value = Column(Float)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    account_value = Column(Float) # This acts as Close
     realized_pnl = Column(Float)
     unrealized_pnl = Column(Float)
     total_capital = Column(Float)
@@ -132,3 +138,30 @@ class Orderbook(Base):
     cancelled_quantity = Column(Integer)
     parent_order_id = Column(String, nullable=True)
     tag = Column(String, nullable=True)
+
+class AccountValue(Base):
+    __tablename__ = "account_values"
+
+    timestamp = Column(DateTime, primary_key=True, index=True)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+
+class DailyAccountValue(Base):
+    __tablename__ = "daily_account_values"
+
+    date = Column(Date, primary_key=True, index=True)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+
+class WeeklyAccountValue(Base):
+    __tablename__ = "weekly_account_values"
+
+    week_start_date = Column(Date, primary_key=True, index=True)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)

@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { BarChart3, List } from "lucide-react"
+import { BarChart3, List, TrendingUp } from "lucide-react"
 
 export default function JournalLandingPage() {
     return (
@@ -42,6 +42,25 @@ export default function JournalLandingPage() {
                         <CardContent>
                             <div className="text-sm text-muted-foreground">
                                 Access detailed records of all your closed trades.
+                            </div>
+                        </CardContent>
+                    </Card>
+                </Link>
+
+                <Link href="/journal/equity">
+                    <Card className="hover:bg-muted/50 transition-colors cursor-pointer h-full">
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <TrendingUp className="h-6 w-6" />
+                                Equity Curve
+                            </CardTitle>
+                            <CardDescription>
+                                Monitor your live account value and growth over time.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-sm text-muted-foreground">
+                                Visualize your intraday and historical account performance.
                             </div>
                         </CardContent>
                     </Card>

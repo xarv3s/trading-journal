@@ -11,3 +11,5 @@ requests
 selenium
 webdriver-manager
 pyotp
+py_vollib
+yfinance

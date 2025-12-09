@@ -5,7 +5,44 @@ import { UnifiedTrade } from "@/types/trade"
 import { ArrowUpDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
+import { Checkbox } from "@/components/ui/checkbox"
+
 export const columns: ColumnDef<UnifiedTrade>[] = [
+    {
+        id: "expander",
+        header: () => null,
+        cell: ({ row }) => {
+            console.log("Row data:", row.original)
+            return row.original.is_basket === 1 ? (
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => row.toggleExpanded()}
+                >
+                    {row.getIsExpanded() ? "▼" : "▶"}
+                </Button>
+            ) : null
+        },
+    },
+    {
+        id: "select",
+        header: ({ table }) => (
+            <Checkbox
+                checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+                onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+                aria-label="Select all"
+            />
+        ),
+        cell: ({ row }) => (
+            <Checkbox
+                checked={row.getIsSelected()}
+                onCheckedChange={(value) => row.toggleSelected(!!value)}
+                aria-label="Select row"
+            />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+    },
     {
         accessorKey: "entry_date",
         header: ({ column }) => {
@@ -49,6 +86,7 @@ export const columns: ColumnDef<UnifiedTrade>[] = [
         accessorKey: "entry_price",
         header: "Entry Price",
         cell: ({ row }) => {
+            if (row.original.is_basket === 1) return <div>-</div>
             const amount = parseFloat(row.getValue("entry_price"))
             return <div>₹{amount.toFixed(2)}</div>
         },
@@ -57,6 +95,7 @@ export const columns: ColumnDef<UnifiedTrade>[] = [
         accessorKey: "exit_price",
         header: "Exit Price",
         cell: ({ row }) => {
+            if (row.original.is_basket === 1) return <div>-</div>
             const amount = row.getValue("exit_price")
             if (amount === null || amount === undefined) return <div>-</div>
             return <div>₹{parseFloat(amount as string).toFixed(2)}</div>

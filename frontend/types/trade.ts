@@ -25,6 +25,10 @@ export interface UnifiedTrade {
     ltp?: number;
     stop_loss?: number;
     open_risk?: number;
+    margin_blocked?: number;
+    gross_exposure?: number;
+    realized_pnl?: number;
+    constituents?: UnifiedTrade[];
 }
 
 export interface PaginatedTradesResponse {

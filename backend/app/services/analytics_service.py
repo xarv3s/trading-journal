@@ -198,8 +198,8 @@ class AnalyticsService:
         total_charges = brokerage + stt + exchange_txn + gst + sebi + stamp
         return total_charges
 
-    def enrich_data(self, initial_capital=100000, transactions=None):
-        if self.df.empty:
+    def enrich_data(self, initial_capital=0, transactions=None, daily_ohlc=None):
+        if self.df.empty and (not transactions or len(transactions) == 0):
             return
 
         self.df['estimated_charges'] = self.df.apply(self.calculate_costs, axis=1)
@@ -228,17 +228,23 @@ class AnalyticsService:
 
         pnl_events = []
         for _, row in self.df.iterrows():
-            pnl_events.append({'date': row['exit_date'], 'amount': row['net_pnl_after_charges'], 'type': 'TRADE'})
+            if pd.notna(row['exit_date']):
+                pnl_events.append({'date': row['exit_date'], 'amount': row['net_pnl_after_charges'], 'type': 'TRADE'})
             
         if not transactions_df.empty:
             for _, row in transactions_df.iterrows():
                 pnl_events.append({'date': row['date'], 'amount': row['signed_amount'], 'type': 'TRANSACTION'})
             
-        timeline_df = pd.DataFrame(pnl_events).sort_values('date')
+        if not pnl_events:
+             timeline_df = pd.DataFrame(columns=['date', 'amount', 'type'])
+        else:
+            timeline_df = pd.DataFrame(pnl_events).sort_values('date')
         
         allocations = []
         account_values = []
         
+        # Calculate allocations based on current capital at entry time
+        # This is an approximation
         for _, row in df_sorted.iterrows():
             realized_pnl = timeline_df[timeline_df['date'] < row['entry_date']]['amount'].sum()
             current_capital = initial_capital + realized_pnl
@@ -254,20 +260,159 @@ class AnalyticsService:
         
         self.timeline_df = timeline_df
         self.initial_capital = initial_capital
+        self.daily_ohlc = daily_ohlc or {}
 
-    def get_equity_curve(self):
+    def get_equity_curve(self, interval='D'):
         if not hasattr(self, 'timeline_df') or self.timeline_df.empty:
             if self.df.empty:
                 return pd.DataFrame()
+            # Fallback if no timeline (shouldn't happen with new logic but good for safety)
             df_sorted = self.df.sort_values('exit_date')
             df_sorted['cumulative_pnl'] = df_sorted['net_pnl'].cumsum()
             df_sorted = df_sorted.rename(columns={'exit_date': 'date', 'cumulative_pnl': 'account_value'})
+            df_sorted = df_sorted.dropna(subset=['date'])
             return df_sorted[['date', 'account_value']]
         
         df = self.timeline_df.copy()
         df['cumulative_change'] = df['amount'].cumsum()
         df['account_value'] = self.initial_capital + df['cumulative_change']
-        df_result = df[['date', 'account_value']].copy()
+        
+        # Resample to daily to get closing value per day
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+        daily_close = df['account_value'].resample('D').last().ffill()
+        
+        # Ensure we have a row for today, even if no events happened today
+        today = pd.Timestamp.now().normalize()
+        if not daily_close.empty and daily_close.index[-1] < today:
+            new_index = pd.date_range(start=daily_close.index[0], end=today, freq='D')
+            daily_close = daily_close.reindex(new_index, method='ffill')
+            
+        # Prepare Daily OHLC DataFrame
+        daily_data = []
+        for date, close_val in daily_close.items():
+            date_obj = date.date()
+            if date_obj < today.date():
+                # Filter out history before today for Daily chart if interval is D
+                # But for Weekly, we might want history? 
+                # User said "Remove the data in the table prior to today" for the daily chart.
+                # Assuming this applies to Weekly too for consistency, OR maybe weekly should show history?
+                # "I also want a weekly chart here" implies showing history aggregated by week.
+                # If we filter everything before today, weekly chart will just be one bar (this week).
+                # Let's assume filtering applies to the *view*, so we generate full history here and filter in the loop based on interval?
+                # Actually, the previous filter was hardcoded in the loop.
+                pass
+
+            if date_obj in self.daily_ohlc:
+                ohlc = self.daily_ohlc[date_obj]
+                daily_data.append({
+                    'date': date,
+                    'open': ohlc['open'],
+                    'high': ohlc['high'],
+                    'low': ohlc['low'],
+                    'close': ohlc['close']
+                })
+            else:
+                daily_data.append({
+                    'date': date,
+                    'open': close_val,
+                    'high': close_val,
+                    'low': close_val,
+                    'close': close_val
+                })
+                
+        df_daily = pd.DataFrame(daily_data).set_index('date')
+        
+        if interval == 'W':
+            # Resample to Weekly
+            # Rule: Open=first open, High=max high, Low=min low, Close=last close
+            weekly = df_daily.resample('W').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last'
+            })
+            
+            result_data = []
+            for date, row in weekly.iterrows():
+                # Filter out data prior to today as per user request
+                # For weekly, we check if the week *ends* before today? 
+                # Or if the week *contains* today?
+                # The user wants "only data starting from today".
+                # If today is Thursday, the weekly bar for this week ends on Sunday.
+                # So we should include the current week.
+                # Any week ending before today should be excluded?
+                # Actually, let's be strict: if the week's data is entirely from before today, exclude it.
+                # Since we resample to 'W' (Sunday), the date is the Sunday of that week.
+                # If today is 2025-12-05 (Friday), the week ends 2025-12-07 (Sunday).
+                # Previous week ended 2025-11-30.
+                # So date >= today is too strict because the current week's date (Sunday) is in future.
+                # But previous weeks are in past.
+                # So we want to keep the week that *contains* today, and future weeks.
+                # The week containing today ends on or after today.
+                # But wait, `resample('W')` labels with the right edge (Sunday).
+                # So `date` is the Sunday.
+                # If `date` < today, then the week ended before today.
+                # But we want to exclude "dashes with historical data".
+                # If we have data for today, it falls into the current week.
+                # So we just need to filter out weeks where the *end date* is before today?
+                # Let's try that.
+                
+                # Wait, if we filter by `date < today`, we might exclude a week that ended yesterday but we want to see?
+                # User said "I only want data starting from today".
+                # So anything before today is "historical dashes".
+                # So yes, filter out anything strictly before the current week.
+                # The current week's label (Sunday) will be >= today (unless today is Sunday).
+                # Actually, if today is Friday Dec 5, week ends Dec 7. Dec 7 >= Dec 5.
+                # If today is Sunday Dec 7, week ends Dec 7. Dec 7 >= Dec 7.
+                # So `date >= today` might work, but what if today is Monday and week ends Sunday?
+                # Then `date` (next Sunday) > today.
+                # What about previous week? Ends last Sunday. Last Sunday < today.
+                # So `date < today` correctly filters out past weeks.
+                
+                # However, there's a catch: `today` variable is a Timestamp.
+                # `date` is also Timestamp.
+                # We need to compare dates.
+                
+                # Also, we need to ensure we don't filter out the *current* week if today is the start of it.
+                # If today is Monday, week ends Sunday. Sunday > Monday. Kept.
+                # If today is Sunday, week ends Sunday. Sunday == Sunday. Kept.
+                # Seems correct.
+                
+                if date.date() < today.date():
+                    continue
+
+                result_data.append({
+                    'date': date,
+                    'account_value': row['close'],
+                    'open': row['open'],
+                    'high': row['high'],
+                    'low': row['low'],
+                    'close': row['close']
+                })
+            df_result = pd.DataFrame(result_data)
+            df_result = df_result.replace({np.nan: None})
+            return df_result
+
+        # Daily Interval
+        result_data = []
+        for date, row in df_daily.iterrows():
+            date_obj = date.date()
+            
+            # Filter out data prior to today as per user request for Daily chart
+            if interval == 'D' and date_obj < today.date():
+                continue
+                
+            result_data.append({
+                'date': date,
+                'account_value': row['close'],
+                'open': row['open'],
+                'high': row['high'],
+                'low': row['low'],
+                'close': row['close']
+            })
+                
+        df_result = pd.DataFrame(result_data)
         df_result = df_result.replace({np.nan: None})
         return df_result
 

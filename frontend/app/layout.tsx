@@ -2,18 +2,17 @@ import type { Metadata } from "next";
 // import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Navbar } from "@/components/shared/navbar";
+import { Sidebar } from "@/components/shared/sidebar";
 import Providers from "@/components/providers";
 import { Toaster } from "@/components/ui/sonner";
+import { ZerodhaAuthGuard } from "@/components/auth/zerodha-guard";
 
 // const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Trading Journal",
+  title: "Trading Platform",
   description: "Advanced Trading Journal & Analytics",
 };
-
-import { ZerodhaAuthGuard } from "@/components/auth/zerodha-guard"
 
 export default function RootLayout({
   children,
@@ -22,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased">
+      <body className="font-sans antialiased" suppressHydrationWarning>
         <Providers>
           <ThemeProvider
             attribute="class"
@@ -31,10 +30,12 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <ZerodhaAuthGuard>
-              <Navbar />
-              <main className="container mx-auto py-6 px-4">
-                {children}
-              </main>
+              <div className="flex h-screen overflow-hidden">
+                <Sidebar />
+                <main className="flex-1 overflow-y-auto bg-background p-6">
+                  {children}
+                </main>
+              </div>
             </ZerodhaAuthGuard>
             <Toaster />
           </ThemeProvider>

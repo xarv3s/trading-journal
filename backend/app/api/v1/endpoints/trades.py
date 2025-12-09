@@ -82,9 +82,119 @@ def update_trade(
     return unified_dict
 
 @router.get("/open", response_model=List[schemas.OpenTrade])
-def read_open_trades(skip: int = 0, limit: int = 100, repo: TradeRepository = Depends(get_repository)):
+def read_open_trades(
+    skip: int = 0, 
+    limit: int = 100, 
+    symbol: str = None,
+    repo: TradeRepository = Depends(get_repository)
+):
     trades = repo.get_all_open_trades()
+    if symbol:
+        trades = [t for t in trades if t.symbol == symbol]
     return trades
+
+@router.post("/basket", response_model=schemas.UnifiedTrade)
+def create_basket(
+    basket_in: schemas.BasketCreate,
+    repo: TradeRepository = Depends(get_repository)
+):
+    print(f"Received basket creation request: {basket_in}")
+    basket = repo.create_basket(basket_in.name, basket_in.trade_ids, basket_in.strategy_type)
+    if not basket:
+        raise HTTPException(status_code=400, detail="Could not create basket. Trades not found or invalid.")
+    
+    # Return UnifiedTrade format
+    return {
+        'id': f"OPEN_{basket.id}",
+        'original_id': basket.id,
+        'source_table': 'OPEN',
+        'trading_symbol': basket.symbol,
+        'instrument_token': basket.instrument_token,
+        'exchange': basket.exchange,
+        'segment': 'EQ',
+        'order_type': basket.product,
+        'entry_date': basket.entry_date,
+        'exit_date': None,
+        'qty': basket.qty,
+        'entry_price': basket.avg_price,
+        'exit_price': None,
+        'pnl': 0,
+        'status': 'OPEN',
+        'is_mtf': basket.is_mtf,
+        'setup_used': basket.setup_used,
+        'mistakes_made': basket.mistakes_made,
+        'notes': basket.notes,
+        'screenshot_path': basket.screenshot_path,
+        'type': basket.type,
+        'strategy_type': basket.strategy_type,
+        'is_basket': 1,
+        'stop_loss': basket.stop_loss,
+        'constituents': [
+            {
+                'id': c.id,
+                'symbol': c.symbol,
+                'instrument_token': c.instrument_token,
+                'qty': c.qty,
+                'avg_price': c.avg_price,
+                'entry_date': c.entry_date,
+                'exchange': c.exchange,
+                'product': c.product,
+                'type': c.type
+            } for c in basket.constituents
+        ]
+    }
+
+@router.post("/basket/{basket_id}/add", response_model=schemas.UnifiedTrade)
+def add_to_basket(
+    basket_id: int,
+    basket_add: schemas.BasketAdd,
+    repo: TradeRepository = Depends(get_repository)
+):
+    trade_ids = basket_add.trade_ids
+    print(f"Adding trades {trade_ids} to basket {basket_id}")
+    basket = repo.add_to_basket(basket_id, trade_ids)
+    if not basket:
+        raise HTTPException(status_code=400, detail="Could not add to basket. Basket or trades not found.")
+    
+    return {
+        'id': f"OPEN_{basket.id}",
+        'original_id': basket.id,
+        'source_table': 'OPEN',
+        'trading_symbol': basket.symbol,
+        'instrument_token': basket.instrument_token,
+        'exchange': basket.exchange,
+        'segment': 'EQ',
+        'order_type': basket.product,
+        'entry_date': basket.entry_date,
+        'exit_date': None,
+        'qty': basket.qty,
+        'entry_price': basket.avg_price,
+        'exit_price': None,
+        'pnl': 0,
+        'status': 'OPEN',
+        'is_mtf': basket.is_mtf,
+        'setup_used': basket.setup_used,
+        'mistakes_made': basket.mistakes_made,
+        'notes': basket.notes,
+        'screenshot_path': basket.screenshot_path,
+        'type': basket.type,
+        'strategy_type': basket.strategy_type,
+        'is_basket': 1,
+        'stop_loss': basket.stop_loss,
+        'constituents': [
+            {
+                'id': c.id,
+                'symbol': c.symbol,
+                'instrument_token': c.instrument_token,
+                'qty': c.qty,
+                'avg_price': c.avg_price,
+                'entry_date': c.entry_date,
+                'exchange': c.exchange,
+                'product': c.product,
+                'type': c.type
+            } for c in basket.constituents
+        ]
+    }
 
 @router.post("/sync")
 def sync_trades(
@@ -101,6 +211,10 @@ def sync_trades(
         orders_df = kite.fetch_orders()
         print(f"Fetched {len(orders_df)} orders")
         
+        if orders_df.empty:
+            print("No orders fetched.")
+            return {"message": "Sync completed", "operations_count": 0, "new_orders": 0}
+
         # Filter out already processed orders
         existing_order_ids = repo.get_all_order_ids()
         new_orders_df = orders_df[~orders_df['order_id'].isin(existing_order_ids)].copy()
@@ -138,3 +252,22 @@ def sync_trades(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
+@router.post("/sync-positions")
+def sync_positions(
+    repo: TradeRepository = Depends(get_repository)
+):
+    kite = get_kite_client()
+    if not kite:
+        raise HTTPException(status_code=500, detail="Kite client not initialized")
+        
+    try:
+        # Fetch today's orders
+        orders_df = kite.fetch_orders()
+        
+        # Process orders incrementally
+        count = repo.process_orders(orders_df)
+        
+        return {"status": "success", "message": f"Processed {count} new orders"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Position sync failed: {str(e)}")

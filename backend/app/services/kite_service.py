@@ -8,6 +8,9 @@ import os
 logger = logging.getLogger(__name__)
 
 class KiteClient:
+    _instruments_cache = None
+    _instruments_cache_time = None
+
     def __init__(self, api_key, api_secret=None, request_token=None, access_token=None):
         self.api_key = api_key
         self.api_secret = api_secret
@@ -45,6 +48,14 @@ class KiteClient:
             logger.error(f"Error fetching positions: {e}")
             return pd.DataFrame()
 
+    def fetch_holdings(self):
+        try:
+            holdings = self.kite.holdings()
+            return pd.DataFrame(holdings)
+        except Exception as e:
+            logger.error(f"Error fetching holdings: {e}")
+            return pd.DataFrame()
+
     def fetch_ltp(self, instruments):
         if not self.kite:
             return {}
@@ -53,7 +64,12 @@ class KiteClient:
             ltp_map = {k: v['last_price'] for k, v in quote.items()}
             return ltp_map
         except Exception as e:
-            print(f"Error fetching LTP: {e}")
+            error_msg = str(e)
+            if "Incorrect `api_key` or `access_token`" in error_msg:
+                # Log as debug to avoid spamming console when not logged in
+                logger.debug(f"Error fetching LTP (Auth failed): {error_msg}")
+            else:
+                logger.error(f"Error fetching LTP: {error_msg}")
             return {}
 
     def fetch_indices_ltp(self):
@@ -465,16 +481,62 @@ class KiteClient:
             logger.error(f"Error placing GTT: {e}")
             raise e
 
-    def get_all_instruments(self, exchanges=['NSE', 'NFO']):
+    def get_all_instruments(self, exchanges=['NSE', 'NFO', 'BSE', 'MCX']):
+        # Check cache (valid for 24 hours)
+        if KiteClient._instruments_cache is not None and KiteClient._instruments_cache_time:
+            if (datetime.now() - KiteClient._instruments_cache_time).total_seconds() < 86400:
+                return KiteClient._instruments_cache
+
         try:
             all_instruments = []
-            for exchange in exchanges:
-                instruments = self.kite.instruments(exchange)
-                all_instruments.extend(instruments)
-            return pd.DataFrame(all_instruments)
+            # If we have a valid kite instance, fetch from API
+            if self.kite:
+                for exchange in exchanges:
+                    try:
+                        instruments = self.kite.instruments(exchange)
+                        all_instruments.extend(instruments)
+                    except Exception as e:
+                        logger.error(f"Error fetching instruments for {exchange}: {e}")
+                
+                df = pd.DataFrame(all_instruments)
+                if not df.empty:
+                    KiteClient._instruments_cache = df
+                    KiteClient._instruments_cache_time = datetime.now()
+                    return df
+            
+            return pd.DataFrame()
         except Exception as e:
             logger.error(f"Error fetching instruments: {e}")
             return pd.DataFrame()
+
+    def search_instruments(self, query, exchange=None):
+        """
+        Search instruments by symbol or name.
+        Returns top 20 matches.
+        """
+        df = self.get_all_instruments()
+        if df.empty:
+            return []
+            
+        query = query.upper()
+        
+        # Filter by exchange if provided
+        if exchange:
+            df = df[df['exchange'] == exchange]
+        
+        # Filter
+        # Priority: Starts with query > Contains query
+        # We can do a simple contains for now
+        
+        # Create a mask
+        # tradingsymbol contains query OR name contains query
+        mask = df['tradingsymbol'].str.contains(query, case=False, na=False) | \
+               df['name'].str.contains(query, case=False, na=False)
+               
+        results = df[mask].head(20)
+        
+        # Convert to list of dicts
+        return results.to_dict('records')
 
     def is_market_open(self):
         try:
@@ -507,3 +569,95 @@ class KiteClient:
         except Exception as e:
             logger.error(f"Error checking market status: {e}")
             return False
+    def fetch_margins(self, items):
+        """
+        Fetch margins for a list of items (trades or baskets).
+        items: List of dicts. Each dict should have:
+            - type: 'BASKET' or 'TRADE'
+            - id: str (unique identifier)
+            - constituents: List of dicts (for BASKET) or single dict (for TRADE)
+              Each constituent dict:
+                - exchange
+                - tradingsymbol
+                - transaction_type
+                - quantity
+                - product
+                - variety (optional, default 'regular')
+                - price (optional)
+        
+        Returns: Dict mapping item['id'] -> margin_required
+        """
+        if not self.kite:
+            return {}
+            
+        results = {}
+        
+        try:
+            # Process Baskets
+            for item in items:
+                if item['type'] == 'BASKET':
+                    orders = []
+                    for c in item['constituents']:
+                        orders.append({
+                            "exchange": c['exchange'],
+                            "tradingsymbol": c['tradingsymbol'],
+                            "transaction_type": c['transaction_type'],
+                            "variety": c.get('variety', 'regular'),
+                            "product": c['product'],
+                            "order_type": c.get('order_type', 'MARKET'),
+                            "quantity": c['quantity'],
+                            "price": c.get('price', 0),
+                            "trigger_price": c.get('trigger_price', 0)
+                        })
+                    
+                    try:
+                        # basket_order_margins expects a list of orders
+                        margins = self.kite.basket_order_margins(orders)
+                        logger.info(f"Basket margins response for {item['id']}: {json.dumps(margins, default=str)}")
+                        
+                        # Use 'final' -> 'total' as the blocked margin (includes hedge benefits)
+                        # Fallback to 'initial' -> 'total' if final is missing or negative (which implies API anomaly for net buy)
+                        final_total = 0
+                        if margins and 'final' in margins:
+                            final_total = margins['final'].get('total', 0)
+                            
+                        if final_total > 0:
+                            results[item['id']] = final_total
+                        elif margins and 'initial' in margins:
+                            results[item['id']] = margins['initial'].get('total', 0)
+                        else:
+                            results[item['id']] = 0
+                    except Exception as e:
+                        logger.error(f"Error fetching basket margin for {item['id']}: {e}")
+                        results[item['id']] = 0
+                        
+                elif item['type'] == 'TRADE':
+                    # Single Order
+                    c = item['constituents'][0] # Should be single item list or just dict
+                    order_params = [{
+                        "exchange": c['exchange'],
+                        "tradingsymbol": c['tradingsymbol'],
+                        "transaction_type": c['transaction_type'],
+                        "variety": c.get('variety', 'regular'),
+                        "product": c['product'],
+                        "order_type": c.get('order_type', 'MARKET'),
+                        "quantity": c['quantity'],
+                        "price": c.get('price', 0),
+                        "trigger_price": c.get('trigger_price', 0)
+                    }]
+                    
+                    try:
+                        margins = self.kite.order_margins(order_params)
+                        # Response is a list of margin objects corresponding to input list
+                        if margins and len(margins) > 0:
+                            results[item['id']] = margins[0].get('total', 0)
+                        else:
+                            results[item['id']] = 0
+                    except Exception as e:
+                        logger.error(f"Error fetching order margin for {item['id']}: {e}")
+                        results[item['id']] = 0
+                        
+        except Exception as e:
+            logger.error(f"Error in fetch_margins: {e}")
+            
+        return results

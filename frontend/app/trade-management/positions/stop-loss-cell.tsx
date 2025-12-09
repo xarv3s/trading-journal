@@ -71,7 +71,7 @@ export function StopLossCell({ trade }: StopLossCellProps) {
 
     return (
         <div className="group flex items-center gap-2">
-            <span>{trade.stop_loss ? `₹${trade.stop_loss}` : "-"}</span>
+            <span>{trade.stop_loss ? `${trade.stop_loss}` : "-"}</span>
             <Button
                 variant="ghost"
                 size="icon"

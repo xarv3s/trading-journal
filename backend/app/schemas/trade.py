@@ -18,7 +18,7 @@ class OpenTradeCreate(TradeBase):
     avg_price: float
     entry_date: datetime
     type: str # LONG/SHORT
-    max_exposure: int
+    max_exposure: Optional[int] = None
 
 class OpenTrade(OpenTradeCreate):
     id: int
@@ -62,6 +62,20 @@ class TradeOperation(BaseModel):
     cost_removed: Optional[float] = None
     pnl_realized: Optional[float] = None
 
+class TradeConstituentSchema(BaseModel):
+    id: int
+    symbol: str
+    instrument_token: int
+    qty: int
+    avg_price: float
+    entry_date: datetime
+    exchange: str
+    product: str
+    type: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
 class UnifiedTrade(BaseModel):
     id: str
     original_id: int
@@ -87,6 +101,7 @@ class UnifiedTrade(BaseModel):
     strategy_type: Optional[str]
     is_basket: Optional[int]
     stop_loss: Optional[float] = None
+    constituents: Optional[List[TradeConstituentSchema]] = []
 
 class TradeUpdate(BaseModel):
     notes: Optional[str] = None
@@ -95,6 +110,14 @@ class TradeUpdate(BaseModel):
     strategy_type: Optional[str] = None
     screenshot_path: Optional[str] = None
     stop_loss: Optional[float] = None
+
+class BasketCreate(BaseModel):
+    name: str
+    trade_ids: List[int]
+    strategy_type: Optional[str] = "TRENDING"
+
+class BasketAdd(BaseModel):
+    trade_ids: List[int]
 
 class PaginatedTrades(BaseModel):
     data: List[UnifiedTrade]
